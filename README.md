@@ -35,6 +35,12 @@ npm install      # заодно скачает Chromium для АТБ
 npm run dev      # http://localhost:3000
 ```
 
+## Деплой на Render (бесплатно, в пару кликов)
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Yevhenoe/kyiv-price-compare)
+
+Render соберёт `Dockerfile` (образ Playwright с Chromium) по настройкам из `render.yaml`. На бесплатном плане сайт засыпает после 15 минут без посетителей — первое открытие после сна занимает около минуты. Если АТБ не помещается в 512 МБ памяти или Cloudflare блокирует адрес Render, задайте `ATB_ENABLED=0` — сайт будет работать с Сильпо и VARUS.
+
 ## Деплой на VPS (Ubuntu)
 
 ```bash

@@ -1,0 +1,12 @@
+# Render Blueprint: https://render.com/deploy?repo=https://github.com/Yevhenoe/kyiv-price-compare
+services:
+  - type: web
+    name: kyiv-price-compare
+    runtime: docker
+    plan: free
+    healthCheckPath: /
+    envVars:
+      - key: TRUST_PROXY
+        value: "1" # Render ставить свій проксі перед сайтом — беремо IP відвідувача з X-Forwarded-For
+      # - key: ATB_ENABLED
+      #   value: "0" # вимкнути АТБ, якщо Chromium не вміщується в пам'ять або Cloudflare блокує

@@ -22,7 +22,8 @@ async function getContext() {
   if (!browserPromise) {
     browserPromise = chromium.launch({
       headless: true,
-      args: ['--disable-blink-features=AutomationControlled', '--no-sandbox'],
+      // --disable-dev-shm-usage: у Docker /dev/shm лише 64 МБ, без цього Chromium падає
+      args: ['--disable-blink-features=AutomationControlled', '--no-sandbox', '--disable-dev-shm-usage'],
     }).then((browser) => {
       browser.on('disconnected', () => { browserPromise = null; contextPromise = null; });
       return browser;

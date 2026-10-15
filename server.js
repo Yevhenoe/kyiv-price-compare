@@ -116,7 +116,8 @@ async function compare(query, onPartial) {
 }
 
 const app = express();
-app.set('trust proxy', 'loopback'); // за nginx
+// За nginx на тому ж сервері — 'loopback'; на хостингу з власним проксі (Render) — TRUST_PROXY=1
+app.set('trust proxy', process.env.TRUST_PROXY ? Number(process.env.TRUST_PROXY) || process.env.TRUST_PROXY : 'loopback');
 app.disable('x-powered-by');
 
 app.get('/api/search', rateLimit, async (req, res) => {
