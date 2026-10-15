@@ -255,28 +255,51 @@ export function initMenu({ STORES, ORDER, $, esc, money, eff, toast, load, save,
 
   /* ---------- відмальовка ---------- */
 
+  const fmtTime = (t) => (t < 60 ? `${t} хв` : `${String(Math.round(t / 30) / 2).replace('.', ',')} год`);
+  const people = (n) => `${n} ${plural(n, 'людина', 'людини', 'людей')}`;
+  const daysTxt = (n) => `${n} ${plural(n, 'день', 'дні', 'днів')}`;
+
+  // Рядки списку покупок → позиції кошика: ціна — за всю потрібну кількість у кожному магазині
+  const toCartItems = (lines) => lines.map((l) => ({
+    key: `menu:${l.i.id}`,
+    title: `${l.i.name} — ${l.need}`,
+    image: l.o.image,
+    pack: l.label,
+    offers: l.byStore.map((b) => ({
+      store: b.o.store, title: `${b.o.title} (${b.label})`,
+      price: Math.round(b.packs * b.o.price * 100) / 100,
+      cardPrice: b.o.cardPrice ? Math.round(b.packs * b.o.cardPrice * 100) / 100 : null,
+      url: b.o.url,
+    })),
+  }));
+
   function render() {
     const out = root.querySelector('#menuOut');
+    const bar = root.querySelector('#mBar');
     if (st.error) {
+      bar.hidden = true;
       out.innerHTML = `<div class="empty"><b>Щось пішло не так</b>${esc(st.error)}<br><br><button class="btn" type="button" data-menu-retry>Спробувати ще раз</button></div>`;
       return;
     }
     if (!st.data) {
+      bar.hidden = true;
       out.innerHTML = `<div class="menu-loading"><span class="refining">Збираємо ціни на продукти в Сільпо, АТБ і VARUS…</span>
-        <p class="hint">Уперше після запуску сервера це займає до хвилини, далі — миттєво.</p>
+        <p class="hint">Уперше після запуску сервера це може зайняти хвилину, далі — миттєво.</p>
         ${'<div class="day sk"><div class="line" style="width:30%"></div><div class="line"></div><div class="line" style="width:80%"></div></div>'.repeat(2)}</div>`;
       return;
     }
 
-    const { people, kcal, days, mode } = st.opts;
+    const { kcal, days, mode } = st.opts;
     const budget = mode === 'range' || mode === 'custom' ? st.opts.budget : null;
     const cands = candidates();
     const { lambda, min, max, mid } = chooseLambda(cands);
     const { plan, need } = buildMenu(cands, lambda);
-    const plans = [{ id: 'best', ...shopping(need, 'best') }, ...ORDER.map((s) => ({ id: s, ...shopping(need, s) }))];
-    const chosen = plans.find((p) => p.id === st.plan) || plans[0];
-    const minTotal = Math.min(...plans.map((p) => p.total));
-    const personDays = people * days;
+    const best = { id: 'best', ...shopping(need, 'best') };
+    const storePlans = ORDER.map((s) => ({ id: s, ...shopping(need, s) })).sort((a, b) => a.total - b.total);
+    const plans = [best, ...storePlans];
+    const chosen = plans.find((p) => p.id === st.plan) || best;
+    const personDays = st.opts.people * days;
+    const storesUsed = new Set(chosen.lines.map((l) => l.o.store)).size;
 
     renderBudget({ min, max, mid });
 
@@ -297,124 +320,137 @@ export function initMenu({ STORES, ORDER, $, esc, money, eff, toast, load, save,
           : `<p class="budget-bad">Після ручних замін меню вийшло на ${money(-left)} ₴ дорожче за бюджет.</p>`;
     }
 
-    const planRow = (p) => {
+    const planCard = (p) => {
       const isBest = p.id === 'best';
-      const name = isBest ? 'Оптимально' : STORES[p.id].name;
-      const storesUsed = new Set(p.lines.map((l) => l.o.store)).size;
-      const ds = isBest
-        ? `кожен продукт там, де дешевше · ${storesUsed} ${plural(storesUsed, 'магазин', 'магазини', 'магазинів')}`
-        : p.moved ? `${p.moved} з ${p.lines.length} продуктів немає — візьмемо деінде` : 'усі продукти є';
-      const diff = p.total - minTotal;
+      const on = p.id === chosen.id;
+      const diff = p.total - best.total;
+      const ds = isBest ? 'кожен продукт там, де дешевше'
+        : `${diff > 0.005 ? `+${money(diff)}` : 'так само'} · ${p.moved ? `${p.moved} ${plural(p.moved, 'продукт', 'продукти', 'продуктів')} деінде` : 'усе є'}`;
       const over = budget && p.total > budget + 0.005;
-      return `<label class="plan ${isBest ? '' : STORES[p.id].cls}${p.id === chosen.id ? ' on' : ''}${Math.abs(diff) < 0.005 ? ' best-plan' : ''}">
-        <input type="radio" name="menuPlan" value="${p.id}" ${p.id === chosen.id ? 'checked' : ''}>
-        <span><span class="nm">${name}</span><span class="ds">${ds}${over ? ' · <span class="over">понад бюджет</span>' : ''}</span></span>
-        <span class="tt">${money(p.total)} ₴${diff > 0.005 ? `<small>+${money(diff)}</small>` : ''}</span>
+      return `<label class="plan-card${on ? ' on' : ''}${isBest ? '' : ` ${STORES[p.id].cls}`}">
+        <span class="pc-name"><input type="radio" name="menuPlan" value="${p.id}" ${on ? 'checked' : ''}>${isBest ? '' : '<i></i>'}${isBest ? 'Оптимально' : STORES[p.id].name}</span>
+        <b>${money(p.total)} ₴</b>
+        <small>${ds}${over ? ' · <span class="over">понад бюджет</span>' : ''}</small>
       </label>`;
     };
 
     const today = new Date();
+    const mealTile = (m) => m.empty
+      ? `<div class="meal-tile empty-meal"><div class="mt-photo"></div><div class="mt-text"><span class="mt-meta">${m.slot.name}</span><span class="mt-name">Немає страв під вибрані фільтри</span></div></div>`
+      : `<article class="meal-tile">
+          <button class="mt-photo" type="button" data-recipe="${m.key}" aria-label="Рецепт: ${esc(m.dish.name)}"><img src="${esc(imgUrl(m.dish.img, 480))}" alt="" loading="lazy" referrerpolicy="no-referrer"></button>
+          <div class="mt-text">
+            <span class="mt-meta">${m.slot.name} · ${Math.round(m.dish.kcal * m.scale)} ккал · ${fmtTime(m.dish.time)}</span>
+            <button class="mt-name" type="button" data-recipe="${m.key}">${esc(m.dish.name)}</button>
+            ${m.dish.notes.length ? `<span class="meal-notes">${esc(m.dish.notes.join(', '))}</span>` : ''}
+          </div>
+          <span class="mt-cost">${money(m.cost)} ₴</span>
+          ${m.alternatives > 1 ? `<button class="swap" type="button" data-swap="${m.key}" aria-label="Інша страва" title="Інша страва">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg></button>` : ''}
+        </article>`;
     const dayCard = (meals, d) => {
       const date = new Date(today.getTime() + (d + 1) * 864e5);
-      const dayCost = meals.reduce((s, m) => s + (m.cost || 0), 0) * people;
+      const dayCost = meals.reduce((s, m) => s + (m.cost || 0), 0) * st.opts.people;
       return `<article class="day">
-        <div class="day-head"><b>${days === 1 ? 'Меню на день' : WEEKDAYS[date.getDay()]}<small>${date.toLocaleDateString('uk-UA', { day: 'numeric', month: 'long' })}</small></b><span>${money(dayCost)} ₴${people > 1 ? ` на ${people}` : ''}</span></div>
-        ${meals.map((m) => m.empty
-          ? `<div class="meal empty-meal"><div class="meal-slot">${m.slot.name}</div><div class="meal-main"><div class="meal-ings">Немає страв, що відповідають фільтрам</div></div></div>`
-          : `<div class="meal">
-          <button class="meal-photo" type="button" data-recipe="${m.key}" aria-label="Рецепт: ${esc(m.dish.name)}"><img src="${esc(imgUrl(m.dish.img, 160))}" alt="" loading="lazy" referrerpolicy="no-referrer"></button>
-          <div class="meal-main">
-            <div class="meal-slot">${m.slot.name} · ${Math.round(m.dish.kcal * m.scale)} ккал · ${m.dish.time} хв</div>
-            <button class="meal-name" type="button" data-recipe="${m.key}">${esc(m.dish.name)}</button>
-            ${m.dish.notes.length ? `<div class="meal-notes">${esc(m.dish.notes.join(', '))}</div>` : ''}
-          </div>
-          <div class="meal-side">
-            <span class="meal-cost">${money(m.cost)} ₴</span>
-            ${m.alternatives > 1 ? `<button class="swap" type="button" data-swap="${m.key}" title="Інша страва" aria-label="Інша страва">↻</button>` : ''}
-          </div>
-        </div>`).join('')}
+        <div class="day-head"><b>${days === 1 ? 'Меню на день' : WEEKDAYS[date.getDay()]}<small>${date.toLocaleDateString('uk-UA', { day: 'numeric', month: 'long' })}</small></b><span>${money(dayCost)} ₴${st.opts.people > 1 ? ` на ${st.opts.people}` : ''}</span></div>
+        <div class="meal-grid">${meals.map(mealTile).join('')}</div>
       </article>`;
     };
 
-    root.querySelector('#menuOut').innerHTML = `
+    const SHOW = 6;
+    const lines = st.showAll ? chosen.lines : chosen.lines.slice(0, SHOW);
+
+    out.innerHTML = `
       ${pending.length ? `<p class="hint"><span class="refining">Ціни ${pending.join(', ')} ще збираються — меню оновиться само</span></p>` : ''}
       ${down.length ? `<p class="warn">${down.join(', ')} зараз не відповідає — рахуємо без ${down.length > 1 ? 'них' : 'нього'}.</p>` : ''}
       ${emptySlots.length ? `<p class="warn">Для прийому «${emptySlots.join('», «')}» немає страв під вибрані фільтри — спробуйте зняти частину обмежень.</p>` : ''}
       <div class="kpis">
-        <div class="kpi hl"><span>До сплати</span><b>${money(chosen.total)} ₴</b><small>${people} ${plural(people, 'людина', 'людини', 'людей')} · ${days} ${plural(days, 'день', 'дні', 'днів')}</small></div>
+        <div class="kpi hl"><span>До сплати</span><b>${money(chosen.total)} ₴</b><small>${people(st.opts.people)} · ${daysTxt(days)} · ${chosen.lines.length} ${plural(chosen.lines.length, 'продукт', 'продукти', 'продуктів')}</small></div>
         <div class="kpi"><span>На людину в день</span><b>${money(chosen.eaten / personDays)} ₴</b><small>вартість з’їденого</small></div>
-        <div class="kpi"><span>Калорії</span><b>${kcal.toLocaleString('uk-UA')}</b><small>ккал на людину в день</small></div>
-        <div class="kpi"><span>Б · Ж · В</span><b>${Math.round(macro.p)} · ${Math.round(macro.f)} · ${Math.round(macro.c)}</b><small>г на людину в день</small></div>
+        <div class="kpi"><span>${kcal.toLocaleString('uk-UA')} ккал · Б Ж В</span><b>${Math.round(macro.p)} · ${Math.round(macro.f)} · ${Math.round(macro.c)}</b><small>г на людину в день</small></div>
       </div>
       ${budgetNote}
+      <div class="plan-cards" role="radiogroup" aria-label="Де купувати">${plans.map(planCard).join('')}</div>
       ${chosen.total - chosen.eaten > 1 ? `<p class="hint">Продукти продаються пачками, тож ${money(chosen.total - chosen.eaten)} ₴ — це залишки (олія, борошно, крупи, спеції), які лишаться на потім.</p>` : ''}
 
-      <div class="menu-grid">
-        <section>
-          <h3 class="sec">Меню · натисніть на страву, щоб побачити рецепт</h3>
-          <div class="days">${plan.map(dayCard).join('')}</div>
-        </section>
-        <aside>
-          <h3 class="sec">Де купити дешевше</h3>
-          <div class="plans">${plans.map(planRow).join('')}</div>
+      <div class="days">${plan.map(dayCard).join('')}</div>
 
-          <h3 class="sec">Список покупок · ${chosen.lines.length}</h3>
-          <div class="shop">${chosen.lines.map((l) => `<div class="shop-row ${STORES[l.o.store].cls}">
-            <div class="shop-main">
-              <div class="shop-name"><b>${esc(l.i.name)}</b> <span>${l.need}</span></div>
-              <a href="${esc(l.o.url)}" target="_blank" rel="noopener nofollow">${esc(l.o.title)}</a>
-            </div>
-            <div class="shop-side"><b>${money(l.cost)} ₴</b><span class="st">${STORES[l.o.store].name} · ${l.label}</span></div>
-          </div>`).join('')}</div>
-          <div class="row-btns">
-            <button class="btn" type="button" data-menu-cart>Додати все в кошик</button>
-            <button class="btn ghost" type="button" data-menu-copy>Скопіювати список</button>
+      <article class="shop-card" id="mShop">
+        <div class="shop-head"><b>Список покупок</b><span>${chosen.lines.length} ${plural(chosen.lines.length, 'продукт', 'продукти', 'продуктів')} · ${storesUsed} ${plural(storesUsed, 'магазин', 'магазини', 'магазинів')}</span></div>
+        <div class="shop">${lines.map((l) => `<div class="shop-row ${STORES[l.o.store].cls}">
+          <div class="shop-main">
+            <div class="shop-name"><b>${esc(l.i.name)}</b> <span>${l.need}</span></div>
+            <a href="${esc(l.o.url)}" target="_blank" rel="noopener nofollow">${esc(l.o.title)}</a>
           </div>
-          <p class="hint">Ціни з онлайн-магазинів, оновлено ${new Date(st.data.updatedAt).toLocaleString('uk-UA', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' })}. Для АТБ — ціна з карткою, якщо є. Калорійність довідкова. Фото страв — Wikimedia Commons.</p>
-        </aside>
-      </div>`;
+          <div class="shop-side"><b>${money(l.cost)} ₴</b><span class="st">${STORES[l.o.store].name} · ${l.label}</span></div>
+        </div>`).join('')}</div>
+        <div class="row-btns">
+          <button class="btn" type="button" data-menu-cart>Додати все в кошик</button>
+          ${chosen.lines.length > SHOW ? `<button class="btn ghost" type="button" data-show-all>${st.showAll ? 'Згорнути' : `Показати всі ${chosen.lines.length}`}</button>` : ''}
+          <button class="btn ghost" type="button" data-menu-copy>Скопіювати список</button>
+        </div>
+        <p class="hint">Ціни з онлайн-магазинів, оновлено ${new Date(st.data.updatedAt).toLocaleString('uk-UA', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' })}. Для АТБ — ціна з карткою, якщо є. Калорійність довідкова. Фото страв — Wikimedia Commons.</p>
+      </article>`;
+
+    // Нижня панель на телефоні: сума і швидкий перехід до списку покупок
+    bar.hidden = false;
+    bar.querySelector('.mbar-sum').textContent = `${money(chosen.total)} ₴`;
+    bar.querySelector('.mbar-sub').textContent = `До сплати · ${storesUsed} ${plural(storesUsed, 'магазин', 'магазини', 'магазинів')}`;
 
     st.last = { chosen, plan };
   }
 
   function openRecipe(key) {
     const m = st.last.plan.flat().find((x) => x.key === key);
-    if (!m) return;
-    const { people } = st.opts;
+    if (!m || m.empty) return;
+    const n = st.opts.people;
     const d = m.dish;
     const dlg = root.querySelector('#recipe');
+    dlg.dataset.key = key;
     dlg.querySelector('.recipe-body').innerHTML = `
-      <figure class="recipe-photo"><img src="${esc(imgUrl(d.img, 800))}" alt="${esc(d.name)}" referrerpolicy="no-referrer">
+      <figure class="recipe-photo"><img src="${esc(imgUrl(d.img, 900))}" alt="${esc(d.name)}" referrerpolicy="no-referrer">
         <figcaption><a href="${esc(imgPage(d.img))}" target="_blank" rel="noopener">Фото: Wikimedia Commons</a></figcaption></figure>
       <div class="recipe-text">
         <p class="eyebrow-sm">${m.slot.name}</p>
         <h2>${esc(d.name)}</h2>
-        <div class="meta">
-          <span class="tag">${d.time} хв</span>
-          <span class="tag">${Math.round(d.kcal * m.scale)} ккал / порція</span>
-          <span class="tag">Б ${Math.round(d.p * m.scale)} · Ж ${Math.round(d.f * m.scale)} · В ${Math.round(d.c * m.scale)} г</span>
-          <span class="tag save">${money(m.cost * people)} ₴ на ${people}</span>
+        <div class="rstats">
+          <div><span>Час</span><b>${fmtTime(d.time)}</b></div>
+          <div><span>Порція</span><b>${Math.round(d.kcal * m.scale)} ккал</b></div>
+          <div><span>Б · Ж · В</span><b>${Math.round(d.p * m.scale)}·${Math.round(d.f * m.scale)}·${Math.round(d.c * m.scale)}</b></div>
+          <div class="hl"><span>На ${n}</span><b>${money(m.cost * n)} ₴</b></div>
         </div>
         ${d.notes.length ? `<p class="meal-notes">Під ваші фільтри: ${esc(d.notes.join(', '))}.</p>` : ''}
-        <h3>Продукти на ${people} ${plural(people, 'порцію', 'порції', 'порцій')}</h3>
-        <ul class="recipe-ings">${Object.entries(d.items).map(([id, g]) => {
-          const i = ing(id);
-          return `<li><span>${esc(i.name)}</span><b>${amount(i, g * m.scale * people)}</b></li>`;
-        }).join('')}</ul>
-        <h3>Як готувати</h3>
-        <ol class="recipe-steps">${d.steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>
-        <p class="hint">Сіль, перець і спеції — за смаком.</p>
+        <div class="rcols">
+          <section>
+            <h3>Продукти на ${n} ${plural(n, 'порцію', 'порції', 'порцій')}</h3>
+            <ul class="recipe-ings">${Object.entries(d.items).map(([id, g]) => {
+              const i = ing(id);
+              return `<li><span>${esc(i.name)}</span><b>${amount(i, g * m.scale * n)}</b></li>`;
+            }).join('')}</ul>
+          </section>
+          <section>
+            <h3>Як готувати</h3>
+            <ol class="recipe-steps">${d.steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>
+            <p class="hint">Сіль, перець і спеції — за смаком.</p>
+          </section>
+        </div>
+        <div class="row-btns">
+          ${m.alternatives > 1 ? '<button class="btn" type="button" data-dialog-swap>Інша страва</button>' : ''}
+          <button class="btn ghost" type="button" data-dialog-cart>Продукти в кошик</button>
+        </div>
       </div>`;
-    if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open', '');
+    if (!dlg.open) { if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open', ''); }
+    dlg.scrollTop = 0;
     document.body.style.overflow = 'hidden';
   }
 
   function renderBudget({ min, max, mid }) {
-    const { mode, budget, people, days } = st.opts;
+    const { mode, budget, days } = st.opts;
     const price = { cheap: min, normal: mid, rich: max };
-    root.querySelector('#mBudgetFor').textContent = `· ${people} ${plural(people, 'людина', 'людини', 'людей')}, ${days} ${plural(days, 'день', 'дні', 'днів')}`;
+    root.querySelector('#mBudgetFor').textContent = days === 1 ? 'на 1 день' : `на ${daysTxt(days)}`;
     root.querySelectorAll('[data-tier]').forEach((b) => {
       b.classList.toggle('on', b.dataset.tier === mode);
+      b.setAttribute('aria-pressed', String(b.dataset.tier === mode));
       b.querySelector('.tier-price').textContent = `≈ ${Math.ceil(price[b.dataset.tier]).toLocaleString('uk-UA')} ₴`;
     });
     const fmt = (n) => n.toLocaleString('uk-UA');
@@ -426,6 +462,7 @@ export function initMenu({ STORES, ORDER, $, esc, money, eff, toast, load, save,
     const o = st.opts;
     root.querySelector('#mPeople').textContent = o.people;
     root.querySelector('#mKcal').value = o.kcal;
+    root.querySelector('#mSummaryText').textContent = `${people(o.people)} · ${daysTxt(o.days)} · ${o.kcal.toLocaleString('uk-UA')} ккал`;
     const b = root.querySelector('#mBudget');
     if (document.activeElement !== b) b.value = o.mode === 'custom' ? o.budget || '' : '';
     b.parentElement.classList.toggle('on', o.mode === 'custom');
@@ -435,8 +472,6 @@ export function initMenu({ STORES, ORDER, $, esc, money, eff, toast, load, save,
     root.querySelectorAll('[data-restrict]').forEach((x) => x.classList.toggle('on', o.restrict.includes(x.dataset.restrict)));
     root.querySelectorAll('[data-goal]').forEach((x) => x.classList.toggle('on', o.goals.includes(x.dataset.goal)));
     root.querySelectorAll('[data-dislike]').forEach((x) => x.classList.toggle('on', o.dislikes.includes(x.dataset.dislike)));
-    const n = o.restrict.length + o.goals.length + o.dislikes.length + (o.diet !== 'all' ? 1 : 0);
-    root.querySelector('#mFilterCount').textContent = n ? `· ${n}` : '';
     root.querySelector('#mDislikeCount').textContent = o.dislikes.length ? `(${o.dislikes.length})` : '';
   }
 
@@ -484,64 +519,65 @@ export function initMenu({ STORES, ORDER, $, esc, money, eff, toast, load, save,
 
   /* ---------- розмітка й події ---------- */
 
+  const chip = (attr, id, name, hint) => `<button type="button" ${attr}="${id}"${hint ? ` title="${esc(hint)}"` : ''}>${name}</button>`;
   root.innerHTML = `
-    <section class="hero menu-hero">
-      <p class="eyebrow"><span class="pulse"></span>Меню під ваш бюджет</p>
-      <h1>Смачно.<br><span>І в бюджет.</span></h1>
-      <p class="lead">Вкажіть, скільки вас, скільки калорій і грошей, — ми складемо різноманітне меню з рецептами і порахуємо, де продукти обійдуться найдешевше.</p>
-    </section>
+    <h1 class="page-title">Смачно. <span>І в бюджет.</span></h1>
+    <div class="menu-layout">
+      <aside class="menu-panel" id="mPanel" aria-label="Налаштування меню">
+        <button class="panel-summary" type="button" data-panel-toggle aria-expanded="false" aria-controls="mBasics">
+          <span id="mSummaryText"></span><b>Змінити</b>
+        </button>
+        <div class="p-basics" id="mBasics">
+          <div class="p-row">
+            <div class="field">
+              <span class="p-label">Людей</span>
+              <div class="stepper"><button type="button" data-people="-1" aria-label="Менше людей">−</button><b id="mPeople"></b><button type="button" data-people="1" aria-label="Більше людей">+</button></div>
+            </div>
+            <div class="field">
+              <span class="p-label">Днів</span>
+              <div class="seg">${DAYS.map((d) => `<button type="button" data-days="${d}" aria-label="${daysTxt(d)}">${d}</button>`).join('')}</div>
+            </div>
+          </div>
+          <div class="field">
+            <label class="p-label" for="mKcal">Ккал на людину в день</label>
+            <div class="chips">
+              <input id="mKcal" class="kcal-input" type="number" min="1200" max="4500" step="100" inputmode="numeric">
+              ${KCAL_PRESETS.map((p) => `<button type="button" data-kcal="${p.kcal}" title="${p.label}">${p.kcal}</button>`).join('')}
+            </div>
+          </div>
+        </div>
 
-    <div class="menu-form">
-      <div class="form-row">
-        <div class="field">
-          <label>Скільки людей</label>
-          <div class="stepper"><button type="button" data-people="-1" aria-label="Менше">−</button><b id="mPeople"></b><button type="button" data-people="1" aria-label="Більше">+</button></div>
-        </div>
-        <div class="field">
-          <label>На скільки днів</label>
-          <div class="seg">${DAYS.map((d) => `<button type="button" data-days="${d}">${d === 7 ? 'тиждень' : `${d} ${plural(d, 'день', 'дні', 'днів')}`}</button>`).join('')}</div>
-        </div>
-      </div>
-      <div class="field">
-        <label>Бюджет на весь термін <span class="label-sub" id="mBudgetFor"></span></label>
-        <div class="tiers" id="mTiers">${TIERS.map((t) => `<button type="button" class="tier" data-tier="${t.id}"><b>${t.name}</b><span class="tier-price">…</span><small>${t.desc}</small></button>`).join('')}</div>
-        <div class="budget-more">
-          <span class="field-hint">або сума:</span>
-          <div class="chips" id="mRanges"></div>
-          <div class="budget-input"><input id="mBudget" type="number" min="0" step="50" inputmode="numeric" placeholder="своя сума"><span>₴</span></div>
-        </div>
-      </div>
-      <div class="field">
-        <label for="mKcal">Ккал на людину в день</label>
-        <div class="kcal-row">
-          <input id="mKcal" type="number" min="1200" max="4500" step="100" inputmode="numeric">
-          <div class="chips">${KCAL_PRESETS.map((p) => `<button type="button" data-kcal="${p.kcal}">${p.kcal} · ${p.label}</button>`).join('')}</div>
-        </div>
-      </div>
-      <details class="filters">
-        <summary>Харчування та обмеження <span id="mFilterCount"></span></summary>
-        <div class="filter-grid">
-          <div class="field">
-            <label>Тип харчування</label>
-            <div class="seg wrap-seg">${DIETS.map((d) => `<button type="button" data-diet="${d.id}">${d.name}</button>`).join('')}</div>
+        <div class="field p-budget">
+          <span class="p-label">Бюджет <span id="mBudgetFor"></span></span>
+          <div class="tiers" id="mTiers">${TIERS.map((t) => `<button type="button" class="tier" data-tier="${t.id}" aria-pressed="false"><b>${t.name}</b><span class="tier-price">…</span><small>${t.desc}</small></button>`).join('')}</div>
+          <div class="budget-more">
+            <span class="field-hint">або сума:</span>
+            <div class="chips" id="mRanges"></div>
+            <div class="budget-input"><input id="mBudget" type="number" min="0" step="50" inputmode="numeric" placeholder="своя сума" aria-label="Своя сума бюджету"><span>₴</span></div>
           </div>
-          <div class="field">
-            <label>Без</label>
-            <div class="chips">${RESTRICT.map((r) => `<button type="button" data-restrict="${r.id}" ${r.hint ? `title="${esc(r.hint)}"` : ''}>${r.name}</button>`).join('')}</div>
-          </div>
-          <div class="field">
-            <label>Мета</label>
-            <div class="chips">${GOALS.map((g) => `<button type="button" data-goal="${g.id}">${g.name}</button>`).join('')}</div>
+        </div>
+
+        <div class="field p-filters">
+          <span class="p-label">Харчування</span>
+          <div class="chips scroll-chips">
+            ${DIETS.filter((d) => d.id !== 'all').map((d) => chip('data-diet', d.id, d.name)).join('')}
+            ${RESTRICT.map((r) => chip('data-restrict', r.id, `Без ${r.name}`, r.hint)).join('')}
+            ${GOALS.map((g) => chip('data-goal', g.id, g.name)).join('')}
           </div>
           <details class="dislikes">
             <summary>Не їм окремі продукти <span id="mDislikeCount"></span></summary>
             <div class="chips" id="mDislikes"></div>
           </details>
         </div>
-      </details>
+      </aside>
+
+      <section class="menu-main" id="menuOut" aria-live="polite"></section>
     </div>
 
-    <div id="menuOut"></div>
+    <div class="mbar" id="mBar" hidden>
+      <div><span class="mbar-sub"></span><b class="mbar-sum"></b></div>
+      <button type="button" data-goto-shop>Список покупок</button>
+    </div>
 
     <dialog class="recipe" id="recipe" aria-label="Рецепт">
       <button class="icon-btn recipe-close" type="button" data-close aria-label="Закрити">
@@ -553,18 +589,37 @@ export function initMenu({ STORES, ORDER, $, esc, money, eff, toast, load, save,
   const dlg = root.querySelector('#recipe');
   const closeRecipe = () => { dlg.close?.(); dlg.removeAttribute('open'); document.body.style.overflow = ''; };
   dlg.addEventListener('close', () => { document.body.style.overflow = ''; });
-  dlg.addEventListener('click', (e) => { if (e.target === dlg || e.target.closest('[data-close]')) closeRecipe(); });
+  dlg.addEventListener('click', (e) => {
+    if (e.target === dlg || e.target.closest('[data-close]')) return closeRecipe();
+    const key = dlg.dataset.key;
+    if (e.target.closest('[data-dialog-swap]')) {
+      st.swaps[key] = (st.swaps[key] || 0) + 1;
+      render();
+      return openRecipe(key);
+    }
+    if (e.target.closest('[data-dialog-cart]')) {
+      const m = st.last.plan.flat().find((x) => x.key === key);
+      const need = Object.fromEntries(Object.entries(m.dish.items).map(([id, g]) => [id, g * m.scale * st.opts.people]));
+      closeRecipe();
+      addItemsToCart(toCartItems(shopping(need, 'best').lines));
+    }
+  });
 
   root.addEventListener('click', async (e) => {
     const t = e.target.closest('button');
     if (!t || t.closest('dialog')) return;
     const o = st.opts;
+    if (t.hasAttribute('data-panel-toggle')) {
+      const open = root.querySelector('#mPanel').classList.toggle('open');
+      t.setAttribute('aria-expanded', String(open));
+      return;
+    }
     if (t.dataset.people) return setOpts({ people: Math.min(12, Math.max(1, o.people + Number(t.dataset.people))) });
     if (t.dataset.kcal) return setOpts({ kcal: Number(t.dataset.kcal) });
     if (t.dataset.days) return setOpts({ days: Number(t.dataset.days) });
     if (t.dataset.tier) return setOpts({ mode: t.dataset.tier });
     if (t.dataset.range) return setOpts({ mode: 'range', budget: Number(t.dataset.range) });
-    if (t.dataset.diet) return setOpts({ diet: t.dataset.diet });
+    if (t.dataset.diet) return setOpts({ diet: o.diet === t.dataset.diet ? 'all' : t.dataset.diet });
     if (t.dataset.restrict) return setOpts({ restrict: toggle(o.restrict, t.dataset.restrict) });
     if (t.dataset.goal) return setOpts({ goals: toggle(o.goals, t.dataset.goal) });
     if (t.dataset.dislike) return setOpts({ dislikes: toggle(o.dislikes, t.dataset.dislike) });
@@ -573,23 +628,10 @@ export function initMenu({ STORES, ORDER, $, esc, money, eff, toast, load, save,
       st.swaps[t.dataset.swap] = (st.swaps[t.dataset.swap] || 0) + 1;
       return render();
     }
+    if (t.hasAttribute('data-show-all')) { st.showAll = !st.showAll; return render(); }
+    if (t.hasAttribute('data-goto-shop')) return root.querySelector('#mShop')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     if (t.hasAttribute('data-menu-retry')) return fetchPrices();
-    if (t.hasAttribute('data-menu-cart')) {
-      addItemsToCart(st.last.chosen.lines.map((l) => ({
-        key: `menu:${l.i.id}`,
-        title: `${l.i.name} — ${l.need}`,
-        image: l.o.image,
-        pack: l.label,
-        // Ціна в кошику — за всю потрібну кількість (кілька пачок / кілограмів) у кожному магазині
-        offers: l.byStore.map((b) => ({
-          store: b.o.store, title: `${b.o.title} (${b.label})`,
-          price: Math.round(b.packs * b.o.price * 100) / 100,
-          cardPrice: b.o.cardPrice ? Math.round(b.packs * b.o.cardPrice * 100) / 100 : null,
-          url: b.o.url,
-        })),
-      })));
-      return;
-    }
+    if (t.hasAttribute('data-menu-cart')) return addItemsToCart(toCartItems(st.last.chosen.lines));
     if (t.hasAttribute('data-menu-copy')) {
       const { chosen } = st.last;
       const text = ORDER.map((s) => {

@@ -37,47 +37,79 @@ function toast(msg) {
 
 /* ===================== Результати ===================== */
 
-function cell(g, s) {
+// Ціна за кг/л для пропозиції (з карткою АТБ, якщо є); для вагових — ціна за кг
+function unitOf(g, o) {
+  if (g.perKg) return eff(o);
+  return o.unitPrice == null ? null : o.unitPrice * eff(o) / o.price;
+}
+const unitLabel = (g) => (/мл|л/.test(g.pack || '') ? 'л' : 'кг');
+
+// Рядок «магазин — смужка — ціна»: довжина смужки пропорційна ціні, найдешевша — лаймова
+function priceRow(g, s, maxPrice) {
   const o = g.offers.find((x) => x.store === s);
   const m = STORES[s];
-  if (!o) return `<div class="cell none ${m.cls}"><span class="st">${m.name}</span><span class="pr">—</span><span class="sub">немає</span></div>`;
-  const best = g.offers.length > 1 && s === g.best;
-  const unit = o.unitPrice != null && !g.perKg
-    ? `${money(o.cardPrice ? o.unitPrice * o.cardPrice / o.price : o.unitPrice)}/${/мл|л/.test(g.pack) ? 'л' : 'кг'}` : '';
-  const sub = o.cardPrice ? 'з карткою АТБ' : o.oldPrice ? `<s>${money(o.oldPrice)}</s>` : unit;
-  const byName = g.offers.length > 1 && o.match === 'name'; // «≈» має сенс лише коли є з чим порівнювати
-  return `<a class="cell ${m.cls}${best ? ' best' : ''}${byName ? ' name' : ''}" href="${esc(o.url)}" target="_blank" rel="noopener nofollow"
-      title="${esc(o.title)}${byName ? ' — збіг за назвою, брендом і фасуванням' : g.offers.length > 1 ? ' — збіг за штрихкодом' : ''}">
-    ${byName ? '<span class="why">≈</span>' : ''}
-    <span class="st">${m.name}</span>
-    <span class="pr">${money(eff(o))}${g.perKg ? '<small>/кг</small>' : ''}</span>
-    <span class="sub">${sub || '&nbsp;'}</span>
+  if (!o) {
+    return `<div class="pr-row none ${m.cls}"><span class="pr-st">${m.name}</span><span class="pr-bar"></span><span class="pr-val"><span class="pr-no">немає</span></span></div>`;
+  }
+  const best = s === g.best;
+  const byName = o.match === 'name';
+  const u = unitOf(g, o);
+  const sub = o.cardPrice ? 'з карткою' : o.oldPrice ? `<s>${money(o.oldPrice)}</s>` : u != null && !g.perKg ? `${money(u)}/${unitLabel(g)}` : '';
+  const width = Math.max(12, Math.round(eff(o) / maxPrice * 100));
+  return `<a class="pr-row ${m.cls}${best ? ' best' : ''}" href="${esc(o.url)}" target="_blank" rel="noopener nofollow"
+      title="${esc(o.title)}${byName ? ' — збіг за назвою, брендом і фасуванням' : ' — збіг за штрихкодом'}">
+    <span class="pr-st">${m.name}${byName ? '<i class="pr-why" aria-label="збіг за назвою">≈</i>' : ''}</span>
+    <span class="pr-bar"><span style="width:${width}%"></span></span>
+    <span class="pr-val"><b>${money(eff(o))}${g.perKg ? '<small>/кг</small>' : ''}</b>${sub ? `<small>${sub}</small>` : ''}</span>
   </a>`;
 }
 
-function productCard(g, i) {
+const addBtn = (g) => {
   const inCart = !!state.cart[g.key];
+  return `<button class="add${inCart ? ' in' : ''}" data-add="${esc(g.key)}" type="button">${inCart ? '✓ У кошику' : '+ У кошик'}</button>`;
+};
+
+function compareCard(g, i) {
+  const maxPrice = Math.max(...g.offers.map(eff));
+  const byName = g.offers.some((o) => o.match === 'name');
   return `
-  <article class="prod" style="animation-delay:${Math.min(i, 12) * 25}ms">
-    <div class="prod-img">${g.image ? `<img src="${esc(g.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ''}</div>
-    <div class="prod-info">
+  <article class="cmp" style="animation-delay:${Math.min(i, 12) * 25}ms">
+    <div class="prod-img">${g.image ? `<img src="${esc(g.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : `<span>${esc(g.pack || '')}</span>`}</div>
+    <div class="cmp-info">
       <h3 class="prod-title">${esc(g.title)}</h3>
       <div class="meta">
-        ${g.brand ? `<span class="tag">${esc(g.brand)}</span>` : ''}
+        ${g.savingPct >= 1 ? `<span class="tag save">−${money(g.saving)} ₴ · ${g.savingPct}%</span>` : ''}
+        <span class="tag">${byName ? '≈ збіг за назвою' : 'EAN — той самий товар'}</span>
         ${g.pack ? `<span class="tag">${esc(g.pack)}</span>` : ''}
-        ${g.savingPct >= 1 ? `<span class="tag save">−${g.savingPct}% · ${money(g.saving)} ₴</span>` : ''}
       </div>
     </div>
-    <div class="prod-side">
-      <div class="prices">${ORDER.map((s) => cell(g, s)).join('')}</div>
-      <button class="add${inCart ? ' in' : ''}" data-add="${esc(g.key)}" type="button">${inCart ? '✓ У кошику' : '+ У кошик'}</button>
+    <div class="pr-rows">${ORDER.map((s) => priceRow(g, s, maxPrice)).join('')}</div>
+    ${addBtn(g)}
+  </article>`;
+}
+
+function singleCard(g, i) {
+  const o = g.offers[0];
+  const m = STORES[o.store];
+  const u = unitOf(g, o);
+  return `
+  <article class="one ${m.cls}" style="animation-delay:${Math.min(i, 12) * 20}ms">
+    <div class="one-head">
+      <span class="one-st">${m.name}</span>
+      ${g.image ? `<img src="${esc(g.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ''}
+    </div>
+    <a class="one-title" href="${esc(o.url)}" target="_blank" rel="noopener nofollow">${esc(g.title)}</a>
+    <div class="one-foot">
+      <span class="one-price"><b>${money(eff(o))}${g.perKg ? '<small>/кг</small>' : ''}</b>
+        <small>${o.cardPrice ? 'з карткою АТБ' : u != null && !g.perKg ? `${money(u)} ₴/${unitLabel(g)}` : o.oldPrice ? `<s>${money(o.oldPrice)}</s>` : ''}</small></span>
+      <button class="plus${state.cart[g.key] ? ' in' : ''}" data-add="${esc(g.key)}" type="button" aria-label="${state.cart[g.key] ? 'Прибрати з кошика' : 'Додати в кошик'}">${state.cart[g.key] ? '✓' : '+'}</button>
     </div>
   </article>`;
 }
 
-// Найнижча ціна за кг/л серед магазинів (для ваги — ціна за кг); без фасування — в кінець
+// Найнижча ціна за кг/л серед магазинів; без фасування — в кінець
 function minUnit(g) {
-  const units = g.offers.map((o) => (g.perKg ? eff(o) : o.unitPrice == null ? null : o.unitPrice * eff(o) / o.price)).filter((u) => u != null);
+  const units = g.offers.map((o) => unitOf(g, o)).filter((u) => u != null);
   return units.length ? Math.min(...units) : Infinity;
 }
 
@@ -94,30 +126,41 @@ function sorted(list) {
 function render() {
   const d = state.data;
   if (!d) return;
-  const list = sorted([...d.compared, ...d.single]);
+  const compared = sorted(d.compared);
+  const single = sorted(d.single);
 
+  // Магазини з кількістю знайденого + підсумок
   const maxSave = Math.max(0, ...d.compared.map((g) => g.savingPct));
-  $('#stat').innerHTML = `<b>${list.length}</b> товарів · <b>${d.compared.length}</b> є в кількох магазинах`
+  const storeChips = ORDER.map((id) => {
+    const st = d.stores.find((s) => s.id === id);
+    if (!st) return '';
+    const val = st.pending ? '<span class="refining">шукаємо</span>' : st.ok ? st.count : 'не відповідає';
+    return `<span class="st-chip ${STORES[id].cls}${!st.ok && !st.pending ? ' off' : ''}">${STORES[id].name} · ${val}</span>`;
+  }).join('');
+  $('#stat').innerHTML = storeChips
+    + `<span class="st-sum"><b>${d.compared.length}</b> ${d.compared.length === 1 ? 'товар є' : 'товарів є'} у кількох мережах`
     + (maxSave ? ` · економія до <span class="hl">${maxSave}%</span>` : '')
-    + (d.stores.some((s) => s.pending) ? ' · <span class="refining">ще шукаємо в АТБ</span>'
-      : d.partial ? ' · <span class="refining">шукаємо ще пари за штрихкодом</span>' : '');
+    + (d.partial && !d.stores.some((s) => s.pending) ? ' · <span class="refining">шукаємо ще пари</span>' : '') + '</span>';
 
   const down = d.stores.filter((s) => !s.ok && !s.pending).map((s) => STORES[s.id].name);
   const warn = down.length ? `<p class="warn">${down.join(', ')} зараз не відповідає — порівнюємо без ${down.length > 1 ? 'них' : 'нього'}. Спробуйте за хвилину.</p>` : '';
 
-  $('#results').innerHTML = warn + (list.length
-    ? list.map(productCard).join('')
-    : '<div class="empty"><b>Нічого не знайдено</b>Уточніть запит — наприклад, додайте бренд або фасування.</div>');
+  if (!compared.length && !single.length) {
+    $('#results').innerHTML = warn + '<div class="empty"><b>Нічого не знайдено</b>Уточніть запит — наприклад, додайте бренд або фасування.</div>';
+    return;
+  }
+  $('#results').innerHTML = warn
+    + (compared.length ? `<h2 class="sec">Є в кількох мережах</h2><div class="cmp-list">${compared.map(compareCard).join('')}</div>` : '')
+    + (single.length ? `<h2 class="sec">Лише в одній мережі${state.sort === 'price' ? ' · найдешевші за кг' : ''}</h2><div class="one-grid">${single.map(singleCard).join('')}</div>` : '');
 }
 
 function renderLoading() {
   $('#toolbar').hidden = false;
-  $('#legend').hidden = false;
-  $('#stat').textContent = 'Шукаємо в 3 магазинах і зіставляємо штрихкоди…';
-  $('#results').innerHTML = Array.from({ length: 4 }, () => `
-    <div class="prod sk"><div class="prod-img"></div>
+  $('#stat').innerHTML = '<span class="refining">Шукаємо в Сільпо, АТБ і VARUS і зіставляємо штрихкоди…</span>';
+  $('#results').innerHTML = '<h2 class="sec">&nbsp;</h2>' + Array.from({ length: 3 }, () => `
+    <div class="cmp sk"><div class="prod-img"></div>
       <div><div class="line" style="width:70%"></div><div class="line" style="width:40%"></div></div>
-      <div class="prod-side"><div class="prices">${'<div class="cell"></div>'.repeat(ORDER.length)}</div></div></div>`).join('');
+      <div class="pr-rows">${'<div class="line"></div>'.repeat(3)}</div></div>`).join('');
 }
 
 let controller;

@@ -35,7 +35,7 @@
   <section class="hero view-compare" id="hero">
     <div class="wrap">
       <p class="eyebrow"><span class="pulse"></span>Сільпо · АТБ · VARUS</p>
-      <h1>Той самий товар.<br><span>Три ціни.</span></h1>
+      <h1>Той самий товар —<br><span>три ціни.</span></h1>
       <p class="lead">Порівнюємо тільки ідентичні товари — та сама марка, той самий продукт, те саме фасування. Збираєте кошик — ми рахуємо, де він дешевший.</p>
     </div>
   </section>
@@ -64,17 +64,13 @@
     <div class="toolbar" id="toolbar" hidden>
       <div class="stat" id="stat"></div>
       <div class="controls">
-        <select id="sort" aria-label="Сортування">
-          <option value="price">Найдешевші за кг/л</option>
-          <option value="relevance">Релевантні</option>
-          <option value="saving">Найбільша економія</option>
+        <label class="sort-label" for="sort">Спершу</label>
+        <select id="sort">
+          <option value="price">найдешевші за кг/л</option>
+          <option value="saving">найбільша економія</option>
+          <option value="relevance">релевантні</option>
         </select>
       </div>
-    </div>
-
-    <div class="legend" id="legend" hidden>
-      <span><i class="dot-ean"></i>EAN — збіг за штрихкодом</span>
-      <span><i class="dot-name"></i>≈ — збіг за назвою, брендом і фасуванням (АТБ не публікує штрихкоди)</span>
     </div>
 
     <section id="results" aria-live="polite"></section>
