@@ -64,7 +64,7 @@ async function assemble(query, results, extraItems, signal, { lookups = true } =
   const all = [...useful, ...atbSingles].map((g) => describe(g, query));
   return {
     query,
-    stores: results.map((r) => ({ id: r.store, ok: r.ok, count: r.items.length })),
+    stores: results.map((r) => ({ id: r.store, ok: r.ok, pending: !!r.pending, count: r.items.length })),
     compared: all.filter((g) => g.offers.length > 1)
       .sort((a, b) => b.relevance - a.relevance || b.offers.length - a.offers.length || a.min - b.min),
     single: all.filter((g) => g.offers.length === 1)
@@ -95,7 +95,14 @@ async function compare(query, onPartial) {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), config.timeout);
   try {
-    const results = await Promise.all(STORES.map((s) => searchStore(s, query, ac.signal)));
+    const searches = STORES.map((s) => searchStore(s, query, ac.signal));
+    // АТБ (headless-браузер) — найповільніший; Сільпо і VARUS показуємо, не чекаючи на нього
+    if (STORES.some((s) => s.id === 'atb')) {
+      const fast = await Promise.all(searches.filter((_, i) => STORES[i].id !== 'atb'));
+      const atbPending = { store: 'atb', ok: true, pending: true, items: [] };
+      onPartial?.(await assemble(query, [...fast, atbPending], [], ac.signal, { lookups: false }));
+    }
+    const results = await Promise.all(searches);
     onPartial?.(await assemble(query, results, [], ac.signal, { lookups: false }));
 
     const atbItems = results.find((r) => r.store === 'atb')?.items || [];
@@ -146,7 +153,8 @@ app.get('/api/search', rateLimit, async (req, res) => {
 app.get('/api/menu', rateLimit, async (req, res) => {
   try {
     const data = await menuPrices.get();
-    res.set('Cache-Control', 'public, max-age=300');
+    // Поки АТБ дозбирається, сторінка перепитує кожні 20 с — такі відповіді не кешуємо
+    res.set('Cache-Control', data.stores.some((s) => s.pending) ? 'no-store' : 'public, max-age=300');
     res.json(data);
   } catch (e) {
     console.error('[menu]', e);

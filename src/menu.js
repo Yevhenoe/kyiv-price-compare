@@ -33,25 +33,26 @@ function toOffer(ing, it) {
 
 export function createMenuPrices({ stores, timeout, ttlSec = 3 * 3600 }) {
   let cached = null; // { data, at }
-  let inflight = null;
 
   async function priceStore(store) {
     const out = {};
     let failed = 0;
     // Сільпо і VARUS — звичайні API. АТБ — headless-браузер за Cloudflare: паралельні вкладки
     // швидко впираються в захист, тому туди по одному запиту, а невдалий повторюємо один раз
+    // VARUS на пачку паралельних запитів відповідає 429 — до нього по два, а 429 повторюємо з паузою
     const isAtb = store.id === 'atb';
     const search = async (q) => {
       for (let attempt = 0; ; attempt++) {
         try {
           return await store.search(q, { limit: 30, timeout, barcodes: false, signal: AbortSignal.timeout(timeout) });
         } catch (e) {
-          if (!isAtb || attempt) throw e;
-          await new Promise((r) => setTimeout(r, 3000));
+          const retry = isAtb ? attempt < 1 : / 429/.test(e.message) && attempt < 3;
+          if (!retry) throw e;
+          await new Promise((r) => setTimeout(r, 3000 * (attempt + 1)));
         }
       }
     };
-    await pool(INGREDIENTS, isAtb ? 1 : 4, async (ing) => {
+    await pool(INGREDIENTS, { atb: 1, varus: 2 }[store.id] ?? 4, async (ing) => {
       try {
         // Для деяких продуктів кілька запитів (яловичина в Сільпо — «телятина»); результати зливаємо
         const items = [];
@@ -75,39 +76,58 @@ export function createMenuPrices({ stores, timeout, ttlSec = 3 * 3600 }) {
     return { id: store.id, ok: failed < INGREDIENTS.length / 2, offers: out };
   }
 
-  async function build() {
-    const t0 = Date.now();
-    const results = await Promise.all(stores.map(priceStore));
+  function publish(results) {
     const ingredients = INGREDIENTS.map(({ must, not, query, maxPack, minPack, ...ing }) => ({
       ...ing,
       unit: ing.unit || 'kg',
       tags: ing.tags || [],
       offers: Object.fromEntries(results.filter((r) => r.offers[ing.id]).map((r) => [r.id, r.offers[ing.id]])),
     }));
-    console.log(`[menu] ціни зібрано за ${Math.round((Date.now() - t0) / 1000)} с`);
-    return {
+    const data = {
       ingredients,
       dishes: DISHES,
-      stores: results.map((r) => ({ id: r.id, ok: r.ok, count: Object.keys(r.offers).length })),
+      stores: results.map((r) => ({ id: r.id, ok: r.ok, pending: !!r.pending, count: Object.keys(r.offers).length })),
       updatedAt: new Date().toISOString(),
     };
+    // Якщо магазин тимчасово не відповів або ще збирається, лишаємо його попередні ціни
+    if (cached) {
+      for (const ing of data.ingredients) {
+        const old = cached.data.ingredients.find((x) => x.id === ing.id);
+        for (const st of data.stores.filter((x) => !x.ok || x.pending)) {
+          if (old?.offers[st.id] && !ing.offers[st.id]) ing.offers[st.id] = old.offers[st.id];
+        }
+      }
+    }
+    cached = { data, at: Date.now() };
+    return data;
   }
 
+  // Сільпо і VARUS відповідають за секунди — публікуємо їхні ціни одразу.
+  // АТБ (headless-браузер) на слабкому сервері може збиратися кілька хвилин — дозбираємо у фоні.
+  let busy = null;
+  let ready = null;
   function refresh() {
-    inflight ||= build()
-      .then((data) => {
-        // Якщо магазин тимчасово не відповів, не затираємо його старі ціни
-        if (cached && data.stores.some((s) => !s.ok)) {
-          for (const ing of data.ingredients) {
-            const old = cached.data.ingredients.find((x) => x.id === ing.id);
-            for (const s of data.stores.filter((x) => !x.ok)) if (old?.offers[s.id]) ing.offers[s.id] = old.offers[s.id];
-          }
-        }
-        cached = { data, at: Date.now() };
-        return data;
+    if (busy) return ready;
+    const t0 = Date.now();
+    const sec = () => Math.round((Date.now() - t0) / 1000);
+    const fast = stores.filter((s) => s.id !== 'atb');
+    const slow = stores.filter((s) => s.id === 'atb');
+    const slowDone = Promise.all(slow.map(priceStore));
+    const fastDone = Promise.all(fast.map(priceStore)).then((fr) => {
+      publish([...fr, ...slow.map((s) => ({ id: s.id, ok: true, pending: true, offers: {} }))]);
+      console.log(`[menu] ціни ${fast.map((s) => s.name).join(', ')} зібрано за ${sec()} с`);
+      return fr;
+    });
+    busy = Promise.all([fastDone, slowDone])
+      .then(([fr, sr]) => {
+        if (!sr.length) return;
+        publish([...fr, ...sr]);
+        console.log(`[menu] ціни АТБ зібрано за ${sec()} с`);
       })
-      .finally(() => { inflight = null; });
-    return inflight;
+      .catch((e) => console.error('[menu]', e.message))
+      .finally(() => { busy = null; });
+    ready = fastDone.then(() => cached.data);
+    return ready;
   }
 
   return {

@@ -283,7 +283,8 @@ export function initMenu({ STORES, ORDER, $, esc, money, eff, toast, load, save,
     const macro = { p: 0, f: 0, c: 0 };
     for (const meals of plan) for (const m of meals) if (!m.empty) for (const k of ['p', 'f', 'c']) macro[k] += m.dish[k] * m.scale / days;
 
-    const down = st.data.stores.filter((s) => !s.ok).map((s) => STORES[s.id].name);
+    const down = st.data.stores.filter((s) => !s.ok && !s.pending).map((s) => STORES[s.id].name);
+    const pending = st.data.stores.filter((s) => s.pending).map((s) => STORES[s.id].name);
     const emptySlots = [...new Set(plan.flat().filter((m) => m.empty).map((m) => m.slot.name.toLowerCase()))];
 
     let budgetNote = '';
@@ -336,6 +337,7 @@ export function initMenu({ STORES, ORDER, $, esc, money, eff, toast, load, save,
     };
 
     root.querySelector('#menuOut').innerHTML = `
+      ${pending.length ? `<p class="hint"><span class="refining">Ціни ${pending.join(', ')} ще збираються — меню оновиться само</span></p>` : ''}
       ${down.length ? `<p class="warn">${down.join(', ')} зараз не відповідає — рахуємо без ${down.length > 1 ? 'них' : 'нього'}.</p>` : ''}
       ${emptySlots.length ? `<p class="warn">Для прийому «${emptySlots.join('», «')}» немає страв під вибрані фільтри — спробуйте зняти частину обмежень.</p>` : ''}
       <div class="kpis">
@@ -458,20 +460,22 @@ export function initMenu({ STORES, ORDER, $, esc, money, eff, toast, load, save,
   }
   const toggle = (list, v) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
 
-  async function fetchPrices() {
+  // silent — тихе оновлення, коли сервер дозібрав ціни АТБ (без екрана завантаження)
+  let polls = 0;
+  async function fetchPrices({ silent = false } = {}) {
     if (st.loading) return;
     st.loading = true;
-    st.error = null;
-    render();
+    if (!silent) { st.error = null; render(); }
     try {
-      const res = await fetch('/api/menu');
+      const res = await fetch('/api/menu', { cache: 'no-store' });
       const json = await res.json().catch(() => ({}));
       if (!res.ok || json.error) throw new Error(json.error || 'Помилка сервера');
       st.data = json;
       st.byId = null;
       renderDislikes();
+      if (json.stores.some((s) => s.pending) && polls++ < 30) setTimeout(() => fetchPrices({ silent: true }), 20000);
     } catch (e) {
-      st.error = e.message;
+      if (!silent) st.error = e.message;
     } finally {
       st.loading = false;
       render();

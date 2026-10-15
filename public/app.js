@@ -99,9 +99,10 @@ function render() {
   const maxSave = Math.max(0, ...d.compared.map((g) => g.savingPct));
   $('#stat').innerHTML = `<b>${list.length}</b> товарів · <b>${d.compared.length}</b> є в кількох магазинах`
     + (maxSave ? ` · економія до <span class="hl">${maxSave}%</span>` : '')
-    + (d.partial ? ' · <span class="refining">шукаємо ще пари за штрихкодом</span>' : '');
+    + (d.stores.some((s) => s.pending) ? ' · <span class="refining">ще шукаємо в АТБ</span>'
+      : d.partial ? ' · <span class="refining">шукаємо ще пари за штрихкодом</span>' : '');
 
-  const down = d.stores.filter((s) => !s.ok).map((s) => STORES[s.id].name);
+  const down = d.stores.filter((s) => !s.ok && !s.pending).map((s) => STORES[s.id].name);
   const warn = down.length ? `<p class="warn">${down.join(', ')} зараз не відповідає — порівнюємо без ${down.length > 1 ? 'них' : 'нього'}. Спробуйте за хвилину.</p>` : '';
 
   $('#results').innerHTML = warn + (list.length
